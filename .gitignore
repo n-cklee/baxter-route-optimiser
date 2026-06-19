@@ -1,0 +1,22 @@
+# Virtual environment
+venv/
+.venv/
+env/
+
+# Geocode cache (rebuilt automatically on first run)
+cache/
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# macOS
+.DS_Store
+
+# Claude Code settings
+.claude/
+
+# Local data files (upload via the app, don't commit patient data)
+data/*.xlsx
+data/*.xls
+data/*.csv
