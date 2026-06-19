@@ -3,9 +3,6 @@ venv/
 .venv/
 env/
 
-# Geocode cache (rebuilt automatically on first run)
-cache/
-
 # Python bytecode
 __pycache__/
 *.py[cod]
