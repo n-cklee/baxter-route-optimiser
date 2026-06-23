@@ -201,6 +201,11 @@ if run_btn and run_ready:
 
         stops = []
         for idx, (_, row) in enumerate(wave_df.iterrows()):
+            raw_consign = row.get("Consign Number", "")
+            try:
+                consign_str = str(int(raw_consign)) if pd.notna(raw_consign) else ""
+            except (TypeError, ValueError):
+                consign_str = str(raw_consign).strip() if pd.notna(raw_consign) else ""
             stops.append(Stop(
                 index=idx + 1,
                 receiver_name=str(row.get("Receiver Name", "")),
@@ -210,6 +215,8 @@ if run_btn and run_ready:
                 lat=float(row["lat"]),
                 lng=float(row["lng"]),
                 df_row_index=idx,
+                consign_number=consign_str,
+                receiver_postcode=str(row.get("Receiver Postcode", "") or "").strip(),
             ))
 
         # ── Step 4: Distance matrix ────────────────────────────────────────
@@ -293,7 +300,7 @@ if st.session_state.optimised and st.session_state.results:
 
     # Section C — Van Assignments
     st.markdown('<div class="section-title">📋 Van Assignments</div>', unsafe_allow_html=True)
-    render_van_assignments(routes_by_wave, df_res)
+    render_van_assignments(routes_by_wave, df_res, date_label=date_label, depot_address=depot_address)
 
     # Section D — Route Cards
     st.markdown('<div class="section-title">🚐 Route Cards</div>', unsafe_allow_html=True)

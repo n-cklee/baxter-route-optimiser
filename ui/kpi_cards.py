@@ -1,8 +1,10 @@
+import io
 import html as _html
 import streamlit as st
 
 DEPOT_SUBURB = "Old Toongabbie"
 DEPOT_POSTCODE = "2146"
+DEPOT_ADDRESS = "Old Toongabbie NSW 2146"
 
 
 def _card(title: str, value: str, subtitle: str, bg: str, text_colour: str = "white") -> str:
@@ -125,6 +127,7 @@ def render_route_cards(routes_by_wave: dict) -> None:
                 rows = []
                 for i, (stop, eta) in enumerate(zip(route.stops, route.eta_list)):
                     rows.append({
+                        "Consign #": stop.consign_number or "—",
                         "Stop": i + 1,
                         "Receiver": stop.receiver_name,
                         "Suburb": stop.receiver_suburb,
@@ -135,6 +138,7 @@ def render_route_cards(routes_by_wave: dict) -> None:
                 # Return-to-depot row
                 if route.return_eta:
                     rows.append({
+                        "Consign #": "—",
                         "Stop": "↩",
                         "Receiver": f"🏠 Return to Depot ({DEPOT_SUBURB})",
                         "Suburb": DEPOT_SUBURB,
@@ -188,13 +192,142 @@ def render_debug_panel(routes_by_wave: dict, wave_times: dict) -> None:
             st.info("No wave data to display.")
 
 
-def render_van_assignments(routes_by_wave: dict, df_valid) -> None:
-    """
-    Van Assignments section: summary table + per-van expandable detail.
+# ── Runsheet generation ───────────────────────────────────────────────────────
 
-    Summary columns: Van # | First Departure | Last Return | Total Stops |
-                     Route Duration | Waves Covered | Status
-    Per-van expander: full stop list per wave including return-to-depot row.
+def _build_van_route_map(routes_by_wave: dict) -> dict:
+    """Return dict[van_id → sorted list of (wave_key, route)]."""
+    van_route_map: dict[int, list] = {}
+    for wave_key, routes in sorted(routes_by_wave.items()):
+        for route in routes:
+            van_route_map.setdefault(route.van_id, []).append((wave_key, route))
+    for van_id in van_route_map:
+        van_route_map[van_id].sort(key=lambda x: x[1].departure_time)
+    return van_route_map
+
+
+def _populate_runsheet_sheet(ws, van_id: int, wave_route_list: list, date_label: str, depot_address: str) -> None:
+    """Write one van's runsheet into an openpyxl worksheet."""
+    from openpyxl.styles import Font, Alignment, PatternFill, Border, Side, GradientFill
+    from openpyxl.utils import get_column_letter
+
+    header_blue = "003366"
+    light_blue  = "D6E4F7"
+    mid_grey    = "F2F2F2"
+    border_colour = "CCCCCC"
+
+    thin = Side(style="thin", color=border_colour)
+    cell_border = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    def set_cell(row, col, value, bold=False, size=11, bg=None, align="left", wrap=False, colour="000000"):
+        c = ws.cell(row=row, column=col, value=value)
+        c.font = Font(bold=bold, size=size, color=colour)
+        c.alignment = Alignment(horizontal=align, vertical="center", wrap_text=wrap)
+        if bg:
+            c.fill = PatternFill("solid", fgColor=bg)
+        c.border = Border(left=thin, right=thin, top=thin, bottom=thin)
+        return c
+
+    first_dep = wave_route_list[0][1].departure_time
+    total_stops = sum(r.stop_count for _, r in wave_route_list)
+
+    # ── Title row ────────────────────────────────────────────────────────────
+    ws.merge_cells("A1:H1")
+    c = ws.cell(row=1, column=1, value=f"Van {van_id} — Runsheet")
+    c.font = Font(bold=True, size=18, color="FFFFFF")
+    c.fill = PatternFill("solid", fgColor=header_blue)
+    c.alignment = Alignment(horizontal="center", vertical="center")
+    ws.row_dimensions[1].height = 32
+
+    # ── Meta rows ────────────────────────────────────────────────────────────
+    meta = [
+        ("Date:", date_label,            "Departure:", first_dep.strftime("%H:%M")),
+        ("Depot:", depot_address,         "Total Stops:", str(total_stops)),
+    ]
+    for ri, (lbl1, val1, lbl2, val2) in enumerate(meta, start=2):
+        ws.merge_cells(f"A{ri}:B{ri}")
+        ws.merge_cells(f"C{ri}:D{ri}")
+        ws.merge_cells(f"E{ri}:F{ri}")
+        ws.merge_cells(f"G{ri}:H{ri}")
+        for col, text, bold in [(1, lbl1, True), (3, val1, False), (5, lbl2, True), (7, val2, False)]:
+            c2 = ws.cell(row=ri, column=col, value=text)
+            c2.font = Font(bold=bold, size=11)
+            c2.fill = PatternFill("solid", fgColor=light_blue)
+            c2.alignment = Alignment(horizontal="left" if not bold else "right", vertical="center")
+            c2.border = Border(left=thin, right=thin, top=thin, bottom=thin)
+        ws.row_dimensions[ri].height = 18
+
+    # ── Blank separator ───────────────────────────────────────────────────────
+    ws.row_dimensions[4].height = 6
+
+    # ── Column headers ────────────────────────────────────────────────────────
+    HEADERS = ["Stop #", "Consign #", "Receiver Name", "Address (Suburb + Postcode)", "ETA", "Dwell", "Notify?", "Signature"]
+    for col, h in enumerate(HEADERS, 1):
+        c3 = ws.cell(row=5, column=col, value=h)
+        c3.font = Font(bold=True, size=11, color="FFFFFF")
+        c3.fill = PatternFill("solid", fgColor=header_blue)
+        c3.alignment = Alignment(horizontal="center", vertical="center")
+        c3.border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    ws.row_dimensions[5].height = 20
+
+    # ── Stop rows ─────────────────────────────────────────────────────────────
+    row_idx = 6
+    stop_num = 1
+    for wave_key, route in wave_route_list:
+        for stop, eta in zip(route.stops, route.eta_list):
+            bg = mid_grey if stop_num % 2 == 0 else "FFFFFF"
+            address = f"{stop.receiver_suburb} {stop.receiver_postcode}".strip()
+            data = [
+                stop_num,
+                stop.consign_number or "—",
+                stop.receiver_name,
+                address or "—",
+                eta.strftime("%H:%M"),
+                "20 min",
+                "Yes" if stop.notification_required else "",
+                "",  # Signature — blank
+            ]
+            for col, val in enumerate(data, 1):
+                c4 = ws.cell(row=row_idx, column=col, value=val)
+                c4.font = Font(size=11)
+                c4.fill = PatternFill("solid", fgColor=bg)
+                c4.alignment = Alignment(horizontal="center" if col in (1, 5, 6, 7) else "left", vertical="center")
+                c4.border = Border(left=thin, right=thin, top=thin, bottom=thin)
+            ws.row_dimensions[row_idx].height = 22
+            row_idx += 1
+            stop_num += 1
+
+    # ── Column widths ─────────────────────────────────────────────────────────
+    col_widths = [8, 14, 26, 32, 8, 10, 10, 26]
+    for i, w in enumerate(col_widths, 1):
+        ws.column_dimensions[get_column_letter(i)].width = w
+
+    # Freeze panes below header row
+    ws.freeze_panes = "A6"
+
+
+def _generate_runsheet_bytes(van_route_map: dict, van_ids: list, date_label: str, depot_address: str) -> bytes:
+    """Return Excel bytes for the given van_ids from van_route_map."""
+    import openpyxl
+    wb = openpyxl.Workbook()
+    wb.remove(wb.active)  # remove default blank sheet
+    for van_id in sorted(van_ids):
+        wave_route_list = van_route_map[van_id]
+        ws = wb.create_sheet(title=f"Van {van_id}")
+        _populate_runsheet_sheet(ws, van_id, wave_route_list, date_label, depot_address)
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def render_van_assignments(
+    routes_by_wave: dict,
+    df_valid,
+    date_label: str = "",
+    depot_address: str = DEPOT_ADDRESS,
+) -> None:
+    """
+    Van Assignments section: summary table + per-van expandable detail
+    with individual runsheet download buttons.
     """
     all_route_pairs = [
         (wave_key, route)
@@ -206,21 +339,7 @@ def render_van_assignments(routes_by_wave: dict, df_valid) -> None:
         st.info("No van assignments to display.")
         return
 
-    consign_col = next(
-        (c for c in ["Connote", "Con Note", "Consignment No", "Consignment Number",
-                     "Consignment #", "Senders Ref"]
-         if c in df_valid.columns),
-        None,
-    )
-
-    # Group routes by global van_id
-    van_route_map: dict[int, list[tuple[str, object]]] = {}
-    for wave_key, route in all_route_pairs:
-        van_route_map.setdefault(route.van_id, []).append((wave_key, route))
-
-    # Sort each van's wave list by departure time
-    for van_id in van_route_map:
-        van_route_map[van_id].sort(key=lambda x: x[1].departure_time)
+    van_route_map = _build_van_route_map(routes_by_wave)
 
     # ── Summary table ────────────────────────────────────────────────────────
     summary_rows = []
@@ -278,7 +397,6 @@ def render_van_assignments(routes_by_wave: dict, df_valid) -> None:
 
         with st.expander(expander_label, expanded=False):
             for wave_key, route in wave_route_list:
-                wave_df = df_valid[df_valid["wave_key"] == wave_key].reset_index(drop=True)
                 st.markdown(
                     f"**Wave: {wave_key}** — departs {route.departure_time.strftime('%H:%M')}, "
                     f"returns ~{route.return_eta.strftime('%H:%M') if route.return_eta else '?'}"
@@ -286,32 +404,23 @@ def render_van_assignments(routes_by_wave: dict, df_valid) -> None:
 
                 stop_rows = []
                 for i, (stop, eta) in enumerate(zip(route.stops, route.eta_list)):
-                    try:
-                        df_row = wave_df.iloc[stop.df_row_index]
-                        postcode = str(df_row.get("Receiver Postcode", "") or "")
-                        consign = str(df_row.get(consign_col, "") or "") if consign_col else "—"
-                    except Exception:
-                        postcode = ""
-                        consign = "—"
-
                     stop_rows.append({
                         "Stop #": i + 1,
-                        "Consign #": consign or "—",
+                        "Consign #": stop.consign_number or "—",
                         "Receiver Name": stop.receiver_name,
                         "Suburb": stop.receiver_suburb,
-                        "Postcode": postcode or "—",
+                        "Postcode": stop.receiver_postcode or "—",
                         "Booking Time": stop.booking_dt.strftime("%H:%M"),
                         "ETA": eta.strftime("%H:%M"),
                         "Dwell": "20 min",
                         "Notification": "🔔 Yes" if stop.notification_required else "—",
                     })
 
-                # Return-to-depot row
                 if route.return_eta:
                     stop_rows.append({
                         "Stop #": "↩",
                         "Consign #": "—",
-                        "Receiver Name": f"🏠 Return to Depot",
+                        "Receiver Name": "🏠 Return to Depot",
                         "Suburb": DEPOT_SUBURB,
                         "Postcode": DEPOT_POSTCODE,
                         "Booking Time": "—",
@@ -322,3 +431,25 @@ def render_van_assignments(routes_by_wave: dict, df_valid) -> None:
 
                 st.markdown(_html_table(stop_rows, header_bg=colour), unsafe_allow_html=True)
                 st.markdown("<div style='margin-top:8px'></div>", unsafe_allow_html=True)
+
+            # Individual van download button
+            single_bytes = _generate_runsheet_bytes(van_route_map, [van_id], date_label, depot_address)
+            st.download_button(
+                label=f"📄 Download Van {van_id} Runsheet",
+                data=single_bytes,
+                file_name=f"runsheet_van{van_id}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key=f"dl_van_{van_id}",
+            )
+
+    # ── All-vans download button ──────────────────────────────────────────────
+    st.markdown("<div style='margin-top:24px'></div>", unsafe_allow_html=True)
+    all_bytes = _generate_runsheet_bytes(van_route_map, list(van_route_map.keys()), date_label, depot_address)
+    st.download_button(
+        label="📄 Download Runsheets (All Vans)",
+        data=all_bytes,
+        file_name="runsheets_all_vans.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        key="dl_all_vans",
+        type="primary",
+    )

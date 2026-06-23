@@ -21,6 +21,8 @@ class Stop:
     lat: float
     lng: float
     df_row_index: int   # original DataFrame index for back-reference
+    consign_number: str = ""
+    receiver_postcode: str = ""
 
 
 @dataclass
