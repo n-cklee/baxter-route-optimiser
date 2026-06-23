@@ -17,3 +17,6 @@ __pycache__/
 data/*.xlsx
 data/*.xls
 data/*.csv
+
+# OSRM matrix cache — date-specific, not committed
+cache/osrm_*.json

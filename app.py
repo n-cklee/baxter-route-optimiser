@@ -112,7 +112,7 @@ if run_btn and run_ready:
 
     from optimiser.data_loader import prepare
     from optimiser.geocoder import geocode_stops, attach_coords, failed_geocodes
-    from optimiser.distance_matrix import build_duration_matrix
+    from optimiser.distance_matrix import build_cached_duration_matrix
     from optimiser.vrp_solver import solve_wave, assign_global_van_ids, Stop, VAN_COLOURS
     from optimiser.comparison import compare
     import numpy as np
@@ -212,6 +212,7 @@ if run_btn and run_ready:
         .sort_values()
     )
 
+    date_str = pd.to_datetime(selected_date).strftime("%Y-%m-%d")
     routes_by_wave: dict = {}
     wave_times: dict = {}  # wave_key → departure datetime
     wave_step = 30 / max(len(wave_departure_series), 1)
@@ -243,7 +244,7 @@ if run_btn and run_ready:
 
         # ── Step 4: Distance matrix ────────────────────────────────────────
         try:
-            matrix = build_duration_matrix(coords)
+            matrix = build_cached_duration_matrix(coords, date_str, wave_key)
         except Exception as e:
             st.warning(f"OSRM call failed for wave {wave_key}: {e} — skipping wave.")
             continue

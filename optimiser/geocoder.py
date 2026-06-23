@@ -1,10 +1,12 @@
+import csv
 import json
 import time
 from pathlib import Path
 from geopy.geocoders import Nominatim
 from geopy.exc import GeocoderTimedOut, GeocoderServiceError
 
-CACHE_PATH = Path(__file__).parent.parent / "cache" / "geocode_cache.json"
+CACHE_PATH = Path(__file__).parent.parent / "cache" / "geocode_cache.csv"
+_LEGACY_JSON_PATH = Path(__file__).parent.parent / "cache" / "geocode_cache.json"
 NOMINATIM_UA = "baxter-route-optimiser/1.0"
 REQUEST_DELAY = 1.1  # seconds between Nominatim calls (rate limit: 1/s)
 
@@ -12,15 +14,31 @@ REQUEST_DELAY = 1.1  # seconds between Nominatim calls (rate limit: 1/s)
 def _load_cache() -> dict:
     if CACHE_PATH.exists():
         try:
-            return json.loads(CACHE_PATH.read_text())
-        except (json.JSONDecodeError, OSError):
+            with CACHE_PATH.open(newline="") as f:
+                return {
+                    row["key"]: {"lat": float(row["lat"]), "lng": float(row["lng"])}
+                    for row in csv.DictReader(f)
+                }
+        except (OSError, KeyError, ValueError):
             return {}
+    # One-time migration from legacy JSON cache
+    if _LEGACY_JSON_PATH.exists():
+        try:
+            data = json.loads(_LEGACY_JSON_PATH.read_text())
+            _save_cache(data)
+            return data
+        except (json.JSONDecodeError, OSError):
+            pass
     return {}
 
 
 def _save_cache(cache: dict) -> None:
     CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    CACHE_PATH.write_text(json.dumps(cache, indent=2))
+    with CACHE_PATH.open("w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["key", "lat", "lng"])
+        for k, v in sorted(cache.items()):
+            writer.writerow([k, v["lat"], v["lng"]])
 
 
 def _cache_key(suburb: str, postcode) -> str:

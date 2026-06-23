@@ -8,7 +8,7 @@ from ortools.constraint_solver import pywrapcp, routing_enums_pb2
 MIN_ROUTE_SECONDS = 9 * 3600   # 9-hour billing minimum / target fill level
 MAX_ROUTE_SECONDS = 12 * 3600  # 12-hour optimal upper bound
 END_OF_DAY_HOUR = 18           # hard curfew: all vans back to depot by 6 PM
-_ITER_TIME_LIMIT = 30          # seconds per binary-search iteration
+_ITER_TIME_LIMIT = 10          # seconds per binary-search iteration
 
 
 @dataclass

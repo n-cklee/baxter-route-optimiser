@@ -1,9 +1,50 @@
+import json
 import requests
 import numpy as np
+from pathlib import Path
 
 OSRM_BASE = "http://router.project-osrm.org/table/v1/driving"
 DWELL_SECONDS = 20 * 60  # 20 minutes per stop
 BATCH_SIZE = 80           # stay well under OSRM's ~100-coordinate cap
+
+_CACHE_DIR = Path(__file__).parent.parent / "cache"
+
+
+def _matrix_cache_path(date_str: str) -> Path:
+    return _CACHE_DIR / f"osrm_{date_str}.json"
+
+
+def _load_matrix_cache(date_str: str) -> dict:
+    p = _matrix_cache_path(date_str)
+    if p.exists():
+        try:
+            return json.loads(p.read_text())
+        except (json.JSONDecodeError, OSError):
+            return {}
+    return {}
+
+
+def _save_matrix_cache(date_str: str, wave_key: str, matrix: np.ndarray) -> None:
+    _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    p = _matrix_cache_path(date_str)
+    cache = _load_matrix_cache(date_str)
+    cache[wave_key] = matrix.tolist()
+    p.write_text(json.dumps(cache))
+
+
+def build_cached_duration_matrix(
+    coords: list[tuple[float, float]],
+    date_str: str,
+    wave_key: str,
+    include_dwell: bool = True,
+) -> np.ndarray:
+    """Return cached OSRM matrix if available for this date+wave, else fetch and cache."""
+    cache = _load_matrix_cache(date_str)
+    if wave_key in cache:
+        return np.array(cache[wave_key])
+    matrix = build_duration_matrix(coords, include_dwell=include_dwell)
+    _save_matrix_cache(date_str, wave_key, matrix)
+    return matrix
 
 
 def _build_coord_string(coords: list[tuple[float, float]]) -> str:
