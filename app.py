@@ -199,24 +199,37 @@ if run_btn and run_ready:
         depot_lat, depot_lng = DEPOT_COORDS
         coords = [(depot_lat, depot_lng)] + list(zip(wave_df["lat"], wave_df["lng"]))
 
+        def _cell(v) -> str:
+            """Return '' for NaN/NA/None; otherwise a clean string."""
+            try:
+                if pd.isna(v):
+                    return ""
+            except (TypeError, ValueError):
+                pass
+            s = str(v).strip()
+            return "" if s.lower() in ("nan", "none", "nat", "<na>") else s
+
         stops = []
         for idx, (_, row) in enumerate(wave_df.iterrows()):
             raw_consign = row.get("Consign Number", "")
-            try:
-                consign_str = str(int(raw_consign)) if pd.notna(raw_consign) else ""
-            except (TypeError, ValueError):
-                consign_str = str(raw_consign).strip() if pd.notna(raw_consign) else ""
+            consign_s = _cell(raw_consign)
+            # Convert "621691.0" → "621691" for numeric consign values
+            if consign_s and "." in consign_s:
+                try:
+                    consign_s = str(int(float(consign_s)))
+                except (ValueError, TypeError):
+                    pass
             stops.append(Stop(
                 index=idx + 1,
-                receiver_name=str(row.get("Receiver Name", "")),
-                receiver_suburb=str(row.get("Receiver Suburb", "")),
+                receiver_name=_cell(row.get("Receiver Name", "")),
+                receiver_suburb=_cell(row.get("Receiver Suburb", "")),
                 booking_dt=row["booking_dt"],
                 notification_required=bool(row.get("notification_required", False)),
                 lat=float(row["lat"]),
                 lng=float(row["lng"]),
                 df_row_index=idx,
-                consign_number=consign_str,
-                receiver_postcode=str(row.get("Receiver Postcode", "") or "").strip(),
+                consign_number=consign_s,
+                receiver_postcode=_cell(row.get("Receiver Postcode", "")),
             ))
 
         # ── Step 4: Distance matrix ────────────────────────────────────────
