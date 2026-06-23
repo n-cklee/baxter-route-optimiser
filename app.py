@@ -117,6 +117,33 @@ if run_btn and run_ready:
     from optimiser.comparison import compare
     import numpy as np
 
+    def _cell(v) -> str:
+        """Safely convert any DataFrame cell to str — returns '' for NaN/NA/None."""
+        try:
+            if pd.isna(v):
+                return ""
+        except (TypeError, ValueError):
+            pass
+        s = str(v).strip()
+        return "" if s.lower() in ("nan", "none", "nat", "<na>") else s
+
+    def _cbool(v) -> bool:
+        """Safely convert any DataFrame cell to bool — returns False for NA."""
+        try:
+            return bool(v)
+        except (TypeError, ValueError):
+            return False
+
+    def _consign(v) -> str:
+        """Convert a consignment cell to a clean string, stripping .0 from floats."""
+        s = _cell(v)
+        if s and "." in s:
+            try:
+                s = str(int(float(s)))
+            except (ValueError, TypeError):
+                pass
+        return s
+
     progress = st.progress(0, text="Loading consignments…")
     status = st.empty()
 
@@ -199,36 +226,18 @@ if run_btn and run_ready:
         depot_lat, depot_lng = DEPOT_COORDS
         coords = [(depot_lat, depot_lng)] + list(zip(wave_df["lat"], wave_df["lng"]))
 
-        def _cell(v) -> str:
-            """Return '' for NaN/NA/None; otherwise a clean string."""
-            try:
-                if pd.isna(v):
-                    return ""
-            except (TypeError, ValueError):
-                pass
-            s = str(v).strip()
-            return "" if s.lower() in ("nan", "none", "nat", "<na>") else s
-
         stops = []
         for idx, (_, row) in enumerate(wave_df.iterrows()):
-            raw_consign = row.get("Consign Number", "")
-            consign_s = _cell(raw_consign)
-            # Convert "621691.0" → "621691" for numeric consign values
-            if consign_s and "." in consign_s:
-                try:
-                    consign_s = str(int(float(consign_s)))
-                except (ValueError, TypeError):
-                    pass
             stops.append(Stop(
                 index=idx + 1,
                 receiver_name=_cell(row.get("Receiver Name", "")),
                 receiver_suburb=_cell(row.get("Receiver Suburb", "")),
                 booking_dt=row["booking_dt"],
-                notification_required=bool(row.get("notification_required", False)),
+                notification_required=_cbool(row.get("notification_required", False)),
                 lat=float(row["lat"]),
                 lng=float(row["lng"]),
                 df_row_index=idx,
-                consign_number=consign_s,
+                consign_number=_consign(row.get("Consign Number", "")),
                 receiver_postcode=_cell(row.get("Receiver Postcode", "")),
             ))
 
